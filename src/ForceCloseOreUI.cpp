@@ -816,15 +816,45 @@ static void ensureConfigExists() {
 // ★ 顺序很关键：先 applyConfig（把回调设成 false），再调 orig
 //   让原函数以"OreUI 禁用"状态运行，避免 orig 内部走到创建
 //   BootstrapConfig 线程的分支（否则在 trusted 模式下会在 ~173s 崩溃）
+//
+// ★ 1.26.50.4 / 1.26.52.3 真机反汇编结论（2026-10-16）：
+//   这两版里 mConfigs 的条目是**被钩的这个函数自己**建出来的 —— 它内部有 13 处
+//   对同一个插入辅助的调用，条目是 operator new(0x40) 现建的，而且全引擎只有
+//   1 个 bl 指向它、每局只调用一次。所以进 detour 时表必然是空的：
+//   "先 applyConfig 再调 orig" 这一步无从下手，日志只会出现
+//   [V1] mConfigs empty (size 0). Skipping.，一直挂钩成功但毫无效果。
+//
+//   于是改成两步：
+//     · 表非空（条目早就注册过）→ 按老顺序改，保留原行为、绕开上面那个竞态
+//     · 表为空 → 说明条目就是这一趟 orig 里才注册的，等它建完再改一次
+//   依据：谓词（OreUIConfig 里那两个 std::function）是建界面时才求值的，
+//   不在 orig 内部求值，所以事后改来得及。
 static void detour_v1(OreUi& a1, void* a2, void* a3, void* a4, void* a5, void* a6) {
-    try { applyConfig(a1, "V1"); } catch (...) { LOGE("[V1] exception in applyConfig"); }
+    bool hadEntries = false;
+    try { hadEntries = (a1.mConfigs.size() != 0); } catch (...) {}
+    if (hadEntries) {
+        try { applyConfig(a1, "V1"); } catch (...) { LOGE("[V1] exception in applyConfig"); }
+    }
     orig_v1(a1, a2, a3, a4, a5, a6);
+    if (!hadEntries) {
+        // 条目是这一趟 orig 里才注册进表的，现在才改得动
+        try { applyConfig(a1, "V1-post"); }
+        catch (...) { LOGE("[V1-post] exception in applyConfig"); }
+    }
 }
 
 static void detour_v10(void* a1, void* a2, void* a3, void* a4, void* a5,
                        void* a6, void* a7, void* a8, void* a9, OreUi& a10, void* a11) {
-    try { applyConfig(a10, "V10"); } catch (...) { LOGE("[V10] exception in applyConfig"); }
+    bool hadEntries = false;
+    try { hadEntries = (a10.mConfigs.size() != 0); } catch (...) {}
+    if (hadEntries) {
+        try { applyConfig(a10, "V10"); } catch (...) { LOGE("[V10] exception in applyConfig"); }
+    }
     orig_v10(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11);
+    if (!hadEntries) {
+        try { applyConfig(a10, "V10-post"); }
+        catch (...) { LOGE("[V10-post] exception in applyConfig"); }
+    }
 }
 
 // ------------------------------------------------------------
