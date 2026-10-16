@@ -14,6 +14,9 @@ jobs:
       matrix:
         target: 
           - arm64-v8a
+          # x86_64 用于在模拟器上验证与架构无关的逻辑（引擎定位、配置落盘等）。
+          # 这个 ABI 没有特征码，扫描必然失败、不会挂钩 —— 这是预期行为。
+          - x86_64
     runs-on: ubuntu-latest
     
     steps:
