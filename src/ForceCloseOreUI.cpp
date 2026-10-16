@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <unistd.h>
 #include <cstdarg>
 #include <android/log.h>
@@ -363,10 +364,28 @@ static OreUiInitFuncV10 orig_v10 = nullptr;
 // Configuration
 // ------------------------------------------------------------
 static std::string getPackageName() {
+    // ★ 优先用注入方通过环境变量给的包名。
+    //
+    // 为什么需要：本库被 Zygisk 模块在 postAppSpecialize 里 dlopen，那一刻
+    // /proc/self/cmdline 还停在 "zygote64" —— zygote 要过一会儿才把进程名改成真名，
+    // 实测在模拟器上这个时间差超过 2 秒，让本库去等并不可靠（而且会拖后挂钩时机）。
+    // 注入方本来就知道目标包名，直接传进来最确定。
+    const char* env = getenv("FCOREUI_PACKAGE");
+    if (env != nullptr && env[0] != '\0') {
+        return std::string(env);
+    }
+
     std::ifstream cmdline("/proc/self/cmdline");
     std::string pkg;
     std::getline(cmdline, pkg, '\0');
-    return pkg.empty() ? "com.mojang.minecraftpe" : pkg;
+
+    // 没有环境变量（例如原来是靠重打包注入的）时回退到 cmdline，
+    // 但如果它还停在 zygote 阶段就不能用 —— 否则配置目录会算成
+    // /data/data/zygote64/... 这种不存在的路径。
+    if (pkg.empty() || pkg.rfind("zygote", 0) == 0) {
+        return "com.mojang.minecraftpe";
+    }
+    return pkg;
 }
 
 static std::string getConfigDir() {
