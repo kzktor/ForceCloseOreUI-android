@@ -1197,7 +1197,13 @@ static void crashSignalHandler(int sig, siginfo_t* info, void* ucontext) {
             int len;
 
             ucontext_t* uc = (ucontext_t*)ucontext;
+#if defined(__aarch64__)
             uintptr_t pc  = (uintptr_t)uc->uc_mcontext.pc;
+#elif defined(__x86_64__)
+            uintptr_t pc  = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+#else
+            uintptr_t pc  = 0;
+#endif
 
             len = snprintf(buf, sizeof(buf),
                 "\n========================================\n"
@@ -1215,6 +1221,7 @@ static void crashSignalHandler(int sig, siginfo_t* info, void* ucontext) {
             );
             write(fd, buf, len);
 
+#if defined(__aarch64__)
             // ARM64 通用寄存器 X0-X30
             for (int i = 0; i < 31; i++) {
                 len = snprintf(buf, sizeof(buf), "X%-2d: 0x%016lx\n",
@@ -1227,6 +1234,21 @@ static void crashSignalHandler(int sig, siginfo_t* info, void* ucontext) {
                            (unsigned long)uc->uc_mcontext.sp,
                            (unsigned long)uc->uc_mcontext.regs[30]);
             write(fd, buf, len);
+#elif defined(__x86_64__)
+            // x86_64：只打关键几个。这个 ABI 的产物只用于在模拟器上验证与架构
+            // 无关的逻辑（引擎定位等），崩溃寄存器不是重点。
+            len = snprintf(buf, sizeof(buf),
+                           "RIP: 0x%016llx\nRSP: 0x%016llx\nRBP: 0x%016llx\n"
+                           "RAX: 0x%016llx\nRBX: 0x%016llx\nRCX: 0x%016llx\nRDX: 0x%016llx\n",
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RIP],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RSP],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RBP],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RAX],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RBX],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RCX],
+                           (unsigned long long)uc->uc_mcontext.gregs[REG_RDX]);
+            write(fd, buf, len);
+#endif
 
             close(fd);
         }
