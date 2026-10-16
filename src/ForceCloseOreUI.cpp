@@ -270,20 +270,45 @@ static bool findMinecraftSegment(ModuleInfo& out) {
         return true;
     }
 
-    // 兜底：extractNativeLibs="false" 时 SO 映射为 base.apk
+    // 兜底：extractNativeLibs="false" 时 libminecraftpe.so 是从 APK 里直接映射的，
+    // /proc/self/maps 的路径字段显示的是 APK 路径而不是 .so 名字，所以主路径找不到它。
+    //
+    // ★ 旧逻辑是「取第一个 >30MB 的 r-x 段」，这个判据完全不可靠：
+    //   模组在进程很早期就加载，那时 MC 的库往往还没映射，于是它会抓到任意一个
+    //   无关的 32MB r-x 映射并「成功」返回；上层轮询看到成功就不再等了，
+    //   后续所有特征码扫描全都在错的内存上跑。
+    //   MC 1.26.52.3 真机上就是这个情况：扫的是 32MB 的无关映射，而真引擎是 313MB，
+    //   于是永远「All signatures exhausted」，一次都没挂上。
+    //
+    // 改成：只认路径里带本应用包名的映射，并在其中取最大的那个。
+    // 引擎 313MB，MC 其它库都不到 8MB，「取最大」这个判据很稳。
+    // 找不到就返回 false，让上层继续轮询等引擎真正加载 —— 这才是正确的行为。
     rewind(fp);
-    while (fgets(line, sizeof(line), fp)) {
-        if (!strstr(line, "r-x")) continue;
-        uintptr_t start, end;
-        if (sscanf(line, "%lx-%lx", &start, &end) != 2) continue;
-        if ((end - start) > 30 * 1024 * 1024) {
-            out.base = start;
-            out.size = end - start;
-            out.segments.push_back({start, end - start}); // ★
-            LOGI("Engine fallback: single r-x segment 0x%lx (%zu bytes)", start, end - start);
+    {
+        uintptr_t best_start = 0;
+        size_t best_size = 0;
+        const std::string& pkg = packageName.empty() ? getPackageName() : packageName;
+        while (fgets(line, sizeof(line), fp)) {
+            if (!strstr(line, "r-x")) continue;
+            if (pkg.empty() || !strstr(line, pkg.c_str())) continue;
+            uintptr_t start, end;
+            if (sscanf(line, "%lx-%lx", &start, &end) != 2) continue;
+            size_t sz = end - start;
+            if (sz > best_size) {
+                best_size = sz;
+                best_start = start;
+            }
+        }
+        if (best_size > 64 * 1024 * 1024) {
+            out.base = best_start;
+            out.size = best_size;
+            out.segments.clear();
+            out.segments.push_back({best_start, best_size});
+            LOGI("Engine fallback: largest r-x of own APK 0x%lx (%zu bytes)", best_start, best_size);
             fclose(fp);
             return true;
         }
+        LOGI("Engine not mapped yet (largest own-APK r-x = %zu bytes), keep waiting", best_size);
     }
 
     fclose(fp);
